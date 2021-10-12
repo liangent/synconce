@@ -36,11 +36,11 @@ def set_size(db, cursor, pathname, size):
     db.commit()
 
 
-def maybe_sync(db, cursor, ssh, sftp, root, filename, local_base):
+def maybe_sync(db, cursor, ssh, sftp, root, filename, local_base, min_free):
     logger.info('Checking %s', os.path.join(root, filename))
-    absolute_pathname = os.path.join(root, filename)
-    pathname = os.path.relpath(absolute_pathname, local_base)
-    size = os.path.getsize(absolute_pathname)
+    full_pathname = os.path.join(root, filename)
+    pathname = os.path.relpath(full_pathname, local_base)
+    size = os.path.getsize(full_pathname)
 
     synchronized_size = get_size(db, cursor, pathname)
     logger.debug('%s: size=%s, syncd_size=%s',
@@ -50,7 +50,7 @@ def maybe_sync(db, cursor, ssh, sftp, root, filename, local_base):
         path = os.path.relpath(root, local_base)
         path = '' if path == '.' else path
 
-        if do_sync(ssh, sftp, absolute_pathname, size, path, filename):
+        if do_sync(ssh, sftp, full_pathname, size, path, filename, min_free):
             logger.info('Synchronization of %s complete, size %s',
                         pathname, size)
             set_size(db, cursor, pathname, size)
@@ -83,7 +83,8 @@ def execute(config):
                             continue
 
                         maybe_sync(db, cursor, ssh, sftp,
-                                   root, filename, local_base)
+                                   root, filename, local_base,
+                                   config.getint('min_free'))
             finally:
                 sftp.close()
         finally:

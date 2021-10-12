@@ -33,6 +33,15 @@ def confirm_dir(ssh, sftp, path):
     return True
 
 
+def space_available(ssh, sftp, path):
+    stdin, stdout, stderr = ssh.exec_command(shlex.join(
+        ['df', '-k', os.path.join(sftp.getcwd(), path)]
+    ))
+    output = stdout.read()
+    stdout.channel.shutdown(2)
+    return int(output.splitlines()[-1].split()[3]) * 1024
+
+
 def head_sha1(fileobj, head_size):
     sha1sum = hashlib.sha1()
     file_to_read = head_size
@@ -126,13 +135,15 @@ def full_transfer(ssh, sftp, src, src_size, dest):
         return True
 
 
-def do_sync(ssh, sftp, fileloc, size, path, filename):
-    logger.info('Synchronizing %s to %s',
-                fileloc, os.path.join(path, filename))
+def do_sync(ssh, sftp, fileloc, size, path, filename, min_free):
+    logger.info('Synchronizing %s (%d B) to %s',
+                fileloc, size, os.path.join(path, filename))
     if not confirm_dir(ssh, sftp, path):
         logger.error('Cannot make remote directory %s', path)
         return False
 
+    space_free = space_available(ssh, sftp, path)
+    logger.info('%d bytes available at "%s"', space_free, path)
     dest = os.path.join(path, filename)
 
     try:
@@ -140,11 +151,28 @@ def do_sync(ssh, sftp, fileloc, size, path, filename):
     except FileNotFoundError:
         logger.info('Remote file %s does not exist. Transferring from %s',
                     dest, fileloc)
+
+        if space_free - size < min_free:
+            logger.error('space available (%d B) is not enough to store %s'
+                         ', min_free=%d, size=%d, space after transfer=%d',
+                         space_free, os.path.join(path, filename),
+                         min_free, size, space_free - size)
+            return False
+
         return full_transfer(ssh, sftp, fileloc, size, dest)
 
     # file already there
     logger.info('Remote file %s exists: %s', dest, repr(attr))
     if not stat.S_ISREG(attr.st_mode):
+        return False
+
+    if space_free + attr.st_size - size < min_free:
+        logger.error('projected space available (%d B) is not enough'
+                     ' to send partial %s: existing size=%d'
+                     ', min_free=%d, size=%d, space after transfer=%d',
+                     space_free, os.path.join(path, filename),
+                     attr.st_size, min_free, size,
+                     space_free + attr.st_size - size)
         return False
 
     return maybe_partial(ssh, sftp, fileloc, size, dest, attr.st_size)
