@@ -7,14 +7,20 @@ import configparser
 def main(args):
     config = configparser.ConfigParser()
     config.read(args.config)
+
     import logging.config
     logging.config.fileConfig(config['global']['logging_conf'])
+    import logging
+    logger = logging.getLogger('synconce')
 
     from synconce import execute
     for section in config.sections():
         if section.startswith('sync_'):
-            execute(config[section])
-
+            try:
+                execute(config[section])
+            except Exception:
+                import traceback
+                logger.error(traceback.format_exc())
 
 if __name__ == '__main__':
     import sys

@@ -33,6 +33,34 @@ def confirm_dir(ssh, sftp, path):
     return True
 
 
+def head_sha1(fileobj, head_size):
+    sha1sum = hashlib.sha1()
+    file_to_read = head_size
+
+    while file_to_read > 0:
+        data = fileobj.read(min(32768, file_to_read))
+        sha1sum.update(data)
+        file_to_read -= len(data)
+        if len(data) == 0:
+            break
+
+    if file_to_read > 0:
+        # file reading ends early. broken file?
+        return None
+
+    return sha1sum.hexdigest().encode('utf-8')
+
+
+def append_transfer(srcf, destf):
+    transferred = 0
+    data = srcf.read(32768)
+    while len(data) > 0:
+        destf.write(data)
+        transferred += len(data)
+        data = srcf.read(32768)
+    return transferred
+
+
 def maybe_partial(ssh, sftp, src, src_size, dest, dest_size):
     logger.info('Attempting partial transferring %s (%d B) from %s (%d B)',
                 dest, dest_size, src, src_size)
@@ -45,29 +73,20 @@ def maybe_partial(ssh, sftp, src, src_size, dest, dest_size):
     stdin, stdout, stderr = ssh.exec_command(shlex.join(
         ['sha1sum', os.path.join(sftp.getcwd(), dest)]
     ))
-    channel = stdout.channel
 
-    sha1sum = hashlib.sha1()
-    src_to_read = dest_size
     with open(src, 'rb') as srcf:
-        while src_to_read > 0:
-            data = srcf.read(min(32768, src_to_read))
-            sha1sum.update(data)
-            src_to_read -= len(data)
-            if len(data) == 0:
-                break
-        if src_to_read > 0:
-            # src reading ends early. broken file?
+        src_sha1 = head_sha1(srcf, dest_size)
+        logger.debug('Local head (%d B) SHA-1: %s', dest_size, src_sha1)
+
+        if src_sha1 is None:
             logger.error('Local file %s could not be read at %d',
                          src, dest_size - src_to_read)
-            channel.shutdown(2)
+            stdout.channel.shutdown(2)
             return False
 
-        src_sha1 = sha1sum.hexdigest().encode('utf-8')
-        logger.debug('Local head (%d B) SHA-1: %s', dest_size, src_sha1)
         dest_sha1 = stdout.read(len(src_sha1))
         logger.debug('Remote SHA-1: %s', dest_sha1)
-        channel.shutdown(2)
+        stdout.channel.shutdown(2)
 
         if src_sha1 != dest_sha1:
             # head of src != dest
@@ -76,15 +95,9 @@ def maybe_partial(ssh, sftp, src, src_size, dest, dest_size):
             return False
 
         logger.info('Remote file matches head of local file. Transferring...')
-        transferred = 0
         with sftp.open(dest, 'ab') as destf:
             destf.set_pipelined(True)
-            data = srcf.read(32768)
-            while len(data) > 0:
-                destf.write(data)
-                transferred += len(data)
-                data = srcf.read(32768)
-
+            transferred = append_transfer(srcf, destf)
         logger.info('%d bytes transferred.', transferred)
 
     # at this point, the remote file should be completely written
@@ -96,6 +109,21 @@ def maybe_partial(ssh, sftp, src, src_size, dest, dest_size):
         logger.warn('Incomplete transferred file %s (%d B) from %s (%d B)',
                     dest, attr.st_size, src, src_size)
         return False
+
+
+def full_transfer(ssh, sftp, src, src_size, dest):
+    with open(src, 'rb') as f:
+        try:
+            attr = sftp.putfo(f, dest, src_size)
+        except IOError:
+            # incomplete upload? but don't retry or resume here
+            logger.warn('Failed/incomplete file %s from %s',
+                        dest, src)
+            return False
+
+        # further check? or already checked by sftp.putfo()
+        logger.info('File transferred, attr=%s', repr(attr))
+        return True
 
 
 def do_sync(ssh, sftp, fileloc, size, path, filename):
@@ -112,18 +140,7 @@ def do_sync(ssh, sftp, fileloc, size, path, filename):
     except FileNotFoundError:
         logger.info('Remote file %s does not exist. Transferring from %s',
                     dest, fileloc)
-        with open(fileloc, 'rb') as f:
-            try:
-                attr = sftp.putfo(f, dest, size)
-            except IOError:
-                # incomplete upload? but don't retry or resume here
-                logger.warn('Failed/incomplete file %s from %s',
-                            dest, fileloc)
-                return False
-
-            # further check? or already checked by sftp.putfo()
-            logger.info('File transferred, attr=%s', repr(attr))
-            return True
+        return full_transfer(ssh, sftp, fileloc, size, dest)
 
     # file already there
     logger.info('Remote file %s exists: %s', dest, repr(attr))
