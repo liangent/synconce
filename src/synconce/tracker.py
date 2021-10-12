@@ -37,26 +37,24 @@ def set_size(db, cursor, pathname, size):
 
 
 def maybe_sync(db, cursor, ssh, sftp, root, filename, local_base, min_free):
-    logger.info('Checking %s', os.path.join(root, filename))
+    logger.info(f'Checking {os.path.join(root, filename)}')
     full_pathname = os.path.join(root, filename)
     pathname = os.path.relpath(full_pathname, local_base)
     size = os.path.getsize(full_pathname)
 
     synchronized_size = get_size(db, cursor, pathname)
-    logger.debug('%s: size=%s, syncd_size=%s',
-                 pathname, size, synchronized_size)
+    logger.debug(f'{pathname}: size={size}, syncd_size={synchronized_size}')
 
     if size != synchronized_size:
         path = os.path.relpath(root, local_base)
         path = '' if path == '.' else path
 
         if do_sync(ssh, sftp, full_pathname, size, path, filename, min_free):
-            logger.info('Synchronization of %s complete, size %s',
-                        pathname, size)
+            logger.info(f'Synchronization of {pathname} complete, size {size}')
             set_size(db, cursor, pathname, size)
 
 def execute(config):
-    logger.info('Starting sync for %s', dict(config))
+    logger.info(f'Starting sync for {dict(config)}')
 
     db = sqlite3.connect(config['data'])
     try:
@@ -77,9 +75,10 @@ def execute(config):
                 for root, dirs, files in os.walk(local_base):
                     for filename in files:
                         if fnmatch.fnmatch(filename, config['exclude']):
-                            logger.info('Skipping %s: matching exclusion %s',
-                                        os.path.join(root, filename),
-                                        config['exclude'])
+                            logger.info(
+                                f'Skipping {os.path.join(root, filename)}'
+                                f': matching exclusion {config["exclude"]}'
+                            )
                             continue
 
                         maybe_sync(db, cursor, ssh, sftp,
