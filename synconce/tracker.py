@@ -20,16 +20,18 @@ def init_db(db, cursor):
                    ON synchronized(pathname)
                    ''')
 
+
 def get_size(context, pathname):
-    context.cursor.execute('SELECT size FROM synchronized WHERE pathname = ?',
-                            (pathname,))
+    context.cursor.execute(
+        'SELECT size FROM synchronized WHERE pathname = ?', (pathname,))
     size = context.cursor.fetchone()
     return size[0] if size else None
 
 
 def set_size(context, pathname, size):
-    context.cursor.execute('REPLACE INTO synchronized(pathname, size) VALUES (?, ?)',
-                   (pathname, size))
+    context.cursor.execute(
+        'REPLACE INTO synchronized(pathname, size) VALUES (?, ?)',
+        (pathname, size))
     context.db.commit()
 
 

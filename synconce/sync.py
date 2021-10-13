@@ -1,7 +1,5 @@
 import os
 import stat
-import shlex
-import hashlib
 
 from . import utils
 
@@ -62,7 +60,7 @@ def maybe_partial(context, src, src_size, dest, dest_size):
             logger.error(f'Head of local {src} does not match remote {dest}')
             return False
 
-        logger.info(f'Remote file matches head of local file. Transferring...')
+        logger.info('Remote file matches head of local file. Transferring...')
         with context.sftp.open(dest, 'ab') as destf:
             destf.set_pipelined(True)
             transferred = utils.append_transfer(srcf, destf)
@@ -137,7 +135,7 @@ def do_sync(context, fileloc, size, path, filename):
                      f': existing size {attr.st_size:,} bytes'
                      f', min_free {min_free:,} bytes'
                      f', size {size:,} bytes, space after transfer'
-                     f' {space_free + attr.st_size- size:,} bytes')
+                     f' {space_free + attr.st_size - size:,} bytes')
         return False
 
     return maybe_partial(context, fileloc, size, dest, attr.st_size)

@@ -26,7 +26,7 @@ class UtilsTest(unittest.TestCase):
 
     def test_head_sha1_overflow_seek(self):
         data = io.BytesIO(b'hello' * 10000)
-        sha1 = head_sha1(data, 60000)
+        head_sha1(data, 60000)
         self.assertEqual(data.read(1), b'')
 
 
