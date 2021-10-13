@@ -3,6 +3,7 @@ import contextlib
 import sqlite3
 import paramiko
 
+from .remote import Remote
 from .sync import do_sync
 
 import logging
@@ -35,5 +36,6 @@ def create_context(config):
 
             with context.ssh.open_sftp() as context.sftp:
                 context.sftp.chdir(config['remote'])
+                context.remote = Remote(context.ssh, context.sftp.getcwd())
 
                 yield context

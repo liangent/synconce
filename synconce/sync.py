@@ -43,7 +43,7 @@ def maybe_partial(context, src, src_size, dest, dest_size):
                      f' than local file {src} ({src_size:,} bytes)')
         return False
 
-    remote_sha1sum, cancel_remote_sha1sum = utils.remote_hashsum(
+    remote_sha1sum = context.remote.hashsum(
         context.ssh, context.sftp.getcwd(), dest, 'sha1')
 
     with open(src, 'rb') as srcf:
@@ -52,7 +52,6 @@ def maybe_partial(context, src, src_size, dest, dest_size):
 
         if src_sha1 is None:
             logger.error(f'Local file {src} could not be read to {dest_size}')
-            cancel_remote_sha1sum()
             return False
 
         dest_sha1 = remote_sha1sum()
@@ -99,12 +98,11 @@ def do_sync(context, fileloc, size, path, filename):
     dest = os.path.join(path, filename)
     logger.info(f'Synchronizing {fileloc} ({size:,} bytes) to {dest}')
 
-    get_space_free, cancel_space_free = utils.remote_space_free(
+    get_space_free = context.remote.space_free(
         context.ssh, context.sftp.getcwd(), path)
 
     if not confirm_dir(context, path):
         logger.error(f'Cannot make remote directory {path}')
-        cancel_space_free()
         return False
 
     try:
