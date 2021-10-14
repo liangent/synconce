@@ -15,8 +15,11 @@ from synconce.sync import do_sync
 class MockSFTP(object):
     def __init__(self, tmpdir):
         self.tmpdir = tmpdir
+        self.bad_mode = set()
 
     def stat(self, path):
+        if 'stat-not-found' in self.bad_mode:
+            raise FileNotFoundError
         return os.stat(os.path.join(self.tmpdir, path))
 
     def mkdir(self, path):
@@ -28,10 +31,14 @@ class MockSFTP(object):
     def open(self, path, *args, **kwargs):
         fileobj = open(os.path.join(self.tmpdir, path), *args, **kwargs)
         fileobj.set_pipelined = lambda *args, **kwargs: None
+        if 'put-bogus' in self.bad_mode:
+            fileobj.write(b'.')
         return fileobj
 
     def putfo(self, fileobj, path, size):
         with open(os.path.join(self.tmpdir, path), 'wb') as f:
+            if 'put-bogus' in self.bad_mode:
+                f.write(b'.')
             shutil.copyfileobj(fileobj, f)
         attr = os.stat(os.path.join(self.tmpdir, path))
         if attr.st_size != size:
@@ -86,6 +93,20 @@ class SyncTest(unittest.TestCase):
         with open(os.path.join(self.tmpdir, 'world')) as f:
             self.assertEqual(f.read(), 'hello\n')
 
+    def test_sync_single_bogus(self):
+        self.write_file('hello')
+        self.context.sftp.bad_mode.add('put-bogus')
+        self.assertFalse(do_sync(self.context, self.tmpfile, 6, '', 'world'))
+
+    def test_sync_bad_root(self):
+        self.write_file('hello')
+        self.context.sftp.bad_mode.add('stat-not-found')
+        self.assertFalse(do_sync(self.context, self.tmpfile, 6,
+                                 'inner', 'world'))
+        self.assertFalse(os.path.exists(os.path.join(self.tmpdir, 'world')))
+        self.assertFalse(os.path.exists(os.path.join(self.tmpdir,
+                                                     'inner', 'world')))
+
     def test_sync_deep(self):
         self.write_file('hello')
         self.assertTrue(do_sync(self.context, self.tmpfile, 6,
@@ -99,6 +120,14 @@ class SyncTest(unittest.TestCase):
         self.assertFalse(do_sync(self.context, self.tmpfile, 6,
                                  'inner', 'world'))
         with open(os.path.join(self.tmpdir, 'inner')) as f:
+            self.assertEqual(f.read(), 'my\n')
+        self.assertFalse(os.path.exists(os.path.join(self.tmpdir, 'world')))
+
+    def test_sync_conflict_dir(self):
+        self.write_file('hello')
+        self.write_file('my', 'inner', 'world')
+        self.assertFalse(do_sync(self.context, self.tmpfile, 6, '', 'inner'))
+        with open(os.path.join(self.tmpdir, 'inner', 'world')) as f:
             self.assertEqual(f.read(), 'my\n')
         self.assertFalse(os.path.exists(os.path.join(self.tmpdir, 'world')))
 
@@ -119,6 +148,23 @@ class SyncTest(unittest.TestCase):
         self.assertTrue(do_sync(self.context, self.tmpfile, 9, '', 'world'))
         with open(os.path.join(self.tmpdir, 'world')) as f:
             self.assertEqual(f.read(), 'my\nhello\n')
+
+    def test_sync_partial_bogus(self):
+        self.write_file('my\nhello')
+        self.write_file('my', 'world')
+        self.context.sftp.bad_mode.add('put-bogus')
+        self.context.remote.hashsum_mock = MagicMock(
+            return_value=hashlib.sha1(b'my\n').hexdigest())
+        self.assertFalse(do_sync(self.context, self.tmpfile, 9, '', 'world'))
+
+    def test_sync_partial_underread(self):
+        self.write_file('my')  # delibrate size mismatch
+        self.write_file('mymy', 'world')
+        self.context.remote.hashsum_mock = MagicMock(
+            return_value=hashlib.sha1(b'mymy\n').hexdigest())
+        self.assertFalse(do_sync(self.context, self.tmpfile, 9, '', 'world'))
+        with open(os.path.join(self.tmpdir, 'world')) as f:
+            self.assertEqual(f.read(), 'mymy\n')
 
     def test_sync_identical(self):
         self.write_file('my')

@@ -26,7 +26,7 @@ class TrackerTest(unittest.TestCase):
                 'user': 'nobody',
                 'rsa_key': '/dev/null',
                 'remote': '/',
-                'exclude': '',
+                'exclude': '*.excluded',
                 'min_free': str(1 << 32),
             }
         })
@@ -41,7 +41,19 @@ class TrackerTest(unittest.TestCase):
 
     def test_tracker_blank(self):
         context = self.context
-        context.do_sync = None
+        context.do_sync = None  # shouldn't be called
+
+        with contextlib.closing(sqlite3.connect(':memory:')) as context.db:
+            context.cursor = context.db.cursor()
+
+            init_db(context.db, context.cursor)
+            execute_walk(context)
+
+    def test_tracker_excluded(self):
+        context = self.context
+        context.do_sync = None  # shouldn't be called
+
+        self.write_file('hello', 'world.excluded')
 
         with contextlib.closing(sqlite3.connect(':memory:')) as context.db:
             context.cursor = context.db.cursor()
