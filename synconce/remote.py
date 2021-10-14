@@ -20,7 +20,7 @@ class Remote(object):
 
         return collect
 
-    def remote_hashsum(self, path, algo):
+    def hashsum(self, path, algo):
         stdin, stdout, stderr = self.ssh.exec_command(shlex.join(
             [f'{algo}sum', os.path.join(self.base, path)]
         ))

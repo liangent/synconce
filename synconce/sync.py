@@ -41,8 +41,7 @@ def maybe_partial(context, src, src_size, dest, dest_size):
                      f' than local file {src} ({src_size:,} bytes)')
         return False
 
-    remote_sha1sum = context.remote.hashsum(
-        context.ssh, context.sftp.getcwd(), dest, 'sha1')
+    remote_sha1sum = context.remote.hashsum(dest, 'sha1')
 
     with open(src, 'rb') as srcf:
         src_sha1 = utils.head_sha1(srcf, dest_size)
@@ -96,8 +95,7 @@ def do_sync(context, fileloc, size, path, filename):
     dest = os.path.join(path, filename)
     logger.info(f'Synchronizing {fileloc} ({size:,} bytes) to {dest}')
 
-    get_space_free = context.remote.space_free(
-        context.ssh, context.sftp.getcwd(), path)
+    get_space_free = context.remote.space_free(path)
 
     if not confirm_dir(context, path):
         logger.error(f'Cannot make remote directory {path}')
