@@ -131,6 +131,24 @@ class TrackerTest(unittest.TestCase):
             call(context, os.path.join(self.tmpdir, 'world'), 7, '', 'world'),
         ])
 
+    def test_tracker_flatten(self):
+        context = self.context
+        context.config['flatten'] = '$'
+        context.do_sync = MagicMock(return_value=True)
+
+        self.write_file('hello', 'inner', 'world')
+
+        with contextlib.closing(sqlite3.connect(':memory:')) as context.db:
+            context.cursor = context.db.cursor()
+
+            init_db(context.db, context.cursor)
+            execute_walk(context)
+            execute_walk(context)
+
+        context.do_sync.assert_called_once_with(
+            context, os.path.join(self.tmpdir, 'inner', 'world'), 6,
+            '', 'inner$world')
+
     def tearDown(self):
         shutil.rmtree(self.tmpdir)
 

@@ -49,6 +49,11 @@ def maybe_sync(context, root, filename):
         path = os.path.relpath(root, local_base)
         path = '' if path == '.' else path
 
+        if context.config.get('flatten') is not None:
+            filename = os.path.join(path, filename)
+            path = ''
+            filename = filename.replace(os.path.sep, context.config['flatten'])
+
         if context.do_sync(context, full_pathname, size, path, filename):
             logger.info(f'Synchronization of {pathname} complete, size {size}')
             set_size(context, pathname, size)
