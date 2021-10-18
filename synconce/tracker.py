@@ -1,4 +1,5 @@
 import os
+import fcntl
 import fnmatch
 from pathlib import Path
 
@@ -65,19 +66,38 @@ def execute_walk(context):
     for root, dirs, files in os.walk(config['local']):
         for filename in files:
             if fnmatch.fnmatch(filename, config['exclude']):
-                logger.info(
-                    f'Skipping {os.path.join(root, filename)}'
-                    f': matching exclusion {config["exclude"]}'
-                )
+                logger.info(f'Skipping {root}//{filename}'
+                            f': matching exclusion {config["exclude"]}')
+                continue
+
+            if root == config['local'] and filename == config['lock_file']:
+                logger.info(f'Skipping {root}//{filename}: is lock_file')
                 continue
 
             maybe_sync(context, Path(root), filename)
 
 
-def execute(config):
+def execute(config, do_sync=None):
     logger.info(f'Starting sync for {dict(config)}')
 
-    with create_context(config) as context:
-        init_db(context.db, context.cursor)
+    if config['lock_file']:
+        local = Path(config['local'])
+        try:
+            fd = os.open(local / config['lock_file'], os.O_WRONLY | os.O_CREAT)
+            fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            logger.error('Another synconce in progress')
+            return
+    else:
+        fd = -1
 
-        execute_walk(context)
+    try:
+        with create_context(config) as context:
+            if do_sync:
+                context.do_sync = do_sync
+            init_db(context.db, context.cursor)
+            execute_walk(context)
+    finally:
+        if fd != -1:
+            fcntl.lockf(fd, fcntl.LOCK_UN)
+            os.close(fd)

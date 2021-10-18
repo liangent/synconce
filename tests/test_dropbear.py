@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import MagicMock
 
 import os
 import configparser
@@ -61,6 +62,7 @@ class DropbearTest(unittest.TestCase):
                 'remote': self.tmpdir_remote,
                 'exclude': '',
                 'min_free': str(1 << 32),
+                'lock_file': '.lock',
             }
         })
 
@@ -83,6 +85,40 @@ class DropbearTest(unittest.TestCase):
         execute(self.config)
         with open(os.path.join(self.tmpdir_remote, 'world')) as f:
             self.assertEqual(f.read(), 'my\nhello\n')
+
+    def concurrent(self):
+        self.write_file(self.tmpdir_local, 'hello', 'world')
+
+        from multiprocessing import Process, Value
+        do_sync_count = Value('i')
+
+        def do_sync_delay(*args, **kwargs):
+            import time
+            time.sleep(1)
+            do_sync_count.value += 1
+            return False
+
+        procs = [Process(target=lambda:
+                         execute(self.config, do_sync=do_sync_delay))
+                 for i in range(2)]
+        [proc.start() for proc in procs]
+        [proc.join() for proc in procs]
+
+        return do_sync_count.value
+
+    def test_concurrent_locked(self):
+        self.assertEqual(self.concurrent(), 1)
+
+    def test_concurrent_unlocked(self):
+        self.config['lock_file'] = ''
+        self.assertEqual(self.concurrent(), 2)
+
+    def test_sequential_locked(self):
+        self.write_file(self.tmpdir_local, 'hello', 'world')
+        do_sync_mock = MagicMock(return_value=False)
+        execute(self.config, do_sync=do_sync_mock)
+        execute(self.config, do_sync=do_sync_mock)
+        self.assertEqual(do_sync_mock.call_count, 2)
 
     def tearDown(self):
         self.dropbear.terminate()

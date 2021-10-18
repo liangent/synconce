@@ -28,6 +28,7 @@ class TrackerTest(unittest.TestCase):
                 'remote': '/',
                 'exclude': '*.excluded',
                 'min_free': str(1 << 32),
+                'lock_file': '',
             }
         })
         self.context = Context()
