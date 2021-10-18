@@ -1,4 +1,3 @@
-import os
 import stat
 
 from . import utils
@@ -9,7 +8,7 @@ logger = logging.getLogger('synconce.sync')
 
 def confirm_dir(context, path):
     try:
-        attr = context.sftp.stat(path)
+        attr = context.sftp.stat(str(path))
         logger.debug(f'"{path}": {repr(attr)}')
         return stat.S_ISDIR(attr.st_mode)
     except FileNotFoundError:
@@ -18,7 +17,7 @@ def confirm_dir(context, path):
     # path determined non-existent:
 
     # check parent of path
-    parent = os.path.dirname(path)
+    parent = path.parent
     if parent == path:
         # at remote_base
         logger.warn(f'Remote base {context.sftp.getcwd()} does not exist')
@@ -28,7 +27,7 @@ def confirm_dir(context, path):
 
     # create path
     logger.info(f'Creating remote directory {path}')
-    context.sftp.mkdir(path)
+    context.sftp.mkdir(str(path))
     return True
 
 
@@ -41,7 +40,7 @@ def maybe_partial(context, src, src_size, dest, dest_size):
                      f' than local file {src} ({src_size:,} bytes)')
         return False
 
-    remote_sha1sum = context.remote.hashsum(dest, 'sha1')
+    remote_sha1sum = context.remote.hashsum(str(dest), 'sha1')
 
     with open(src, 'rb') as srcf:
         src_sha1 = utils.head_sha1(srcf, dest_size)
@@ -60,13 +59,13 @@ def maybe_partial(context, src, src_size, dest, dest_size):
             return False
 
         logger.info('Remote file matches head of local file. Transferring...')
-        with context.sftp.open(dest, 'ab') as destf:
+        with context.sftp.open(str(dest), 'ab') as destf:
             destf.set_pipelined(True)
             transferred = utils.append_transfer(srcf, destf)
         logger.info(f'{transferred:,} bytes transferred.')
 
     # at this point, the remote file should be completely written
-    attr = context.sftp.stat(dest)
+    attr = context.sftp.stat(str(dest))
     logger.info(f'Remote file {dest} after sync: {repr(attr)}')
     if attr.st_size == src_size:
         return True
@@ -79,7 +78,7 @@ def maybe_partial(context, src, src_size, dest, dest_size):
 def full_transfer(context, src, src_size, dest):
     with open(src, 'rb') as f:
         try:
-            attr = context.sftp.putfo(f, dest, src_size)
+            attr = context.sftp.putfo(f, str(dest), src_size)
         except IOError:
             # incomplete upload? but don't retry or resume here
             logger.warn(f'Failed/incomplete file {dest} from {src}')
@@ -92,17 +91,17 @@ def full_transfer(context, src, src_size, dest):
 
 def do_sync(context, fileloc, size, path, filename):
     min_free = context.config.getint('min_free')
-    dest = os.path.join(path, filename)
+    dest = path / filename
     logger.info(f'Synchronizing {fileloc} ({size:,} bytes) to {dest}')
 
-    get_space_free = context.remote.space_free(path)
+    get_space_free = context.remote.space_free(str(path))
 
     if not confirm_dir(context, path):
         logger.error(f'Cannot make remote directory {path}')
         return False
 
     try:
-        attr = context.sftp.stat(dest)
+        attr = context.sftp.stat(str(dest))
     except FileNotFoundError:
         space_free = get_space_free()
         logger.info(f'Remote file {dest} does not exist'

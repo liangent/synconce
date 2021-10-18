@@ -6,6 +6,7 @@ import configparser
 import shutil
 import tempfile
 import hashlib
+from pathlib import Path
 
 from synconce.context import Context
 from synconce.remote import Remote
@@ -20,27 +21,27 @@ class MockSFTP(object):
     def stat(self, path):
         if 'stat-not-found' in self.bad_mode:
             raise FileNotFoundError
-        return os.stat(os.path.join(self.tmpdir, path))
+        return (self.tmpdir / path).stat()
 
     def mkdir(self, path):
-        return os.mkdir(os.path.join(self.tmpdir, path))
+        return (self.tmpdir / path).mkdir()
 
     def getcwd(self):
         return '/'
 
     def open(self, path, *args, **kwargs):
-        fileobj = open(os.path.join(self.tmpdir, path), *args, **kwargs)
+        fileobj = open(self.tmpdir / path, *args, **kwargs)
         fileobj.set_pipelined = lambda *args, **kwargs: None
         if 'put-bogus' in self.bad_mode:
             fileobj.write(b'.')
         return fileobj
 
     def putfo(self, fileobj, path, size):
-        with open(os.path.join(self.tmpdir, path), 'wb') as f:
+        with open(self.tmpdir / path, 'wb') as f:
             if 'put-bogus' in self.bad_mode:
                 f.write(b'.')
             shutil.copyfileobj(fileobj, f)
-        attr = os.stat(os.path.join(self.tmpdir, path))
+        attr = (self.tmpdir / path).stat()
         if attr.st_size != size:
             raise IOError()
         return attr
@@ -50,12 +51,13 @@ class SyncTest(unittest.TestCase):
     def setUp(self):
         fd, self.tmpfile = tempfile.mkstemp()
         os.close(fd)
-        self.tmpdir = tempfile.mkdtemp()
+        self.tmpfile = Path(self.tmpfile)
+        self.tmpdir = Path(tempfile.mkdtemp())
         config = configparser.ConfigParser()
         config.read_dict({
             'sync_test': {
                 'data': ':memory:',
-                'local': self.tmpdir,
+                'local': str(self.tmpdir),
                 'host': '0.0.0.0',
                 'port': '22',
                 'user': 'nobody',
@@ -80,64 +82,67 @@ class SyncTest(unittest.TestCase):
 
     def write_file(self, content, *path):
         if path:
-            os.makedirs(os.path.join(self.tmpdir, *path[:-1]), exist_ok=True)
-            pathname = os.path.join(self.tmpdir, *path)
+            path = self.tmpdir / Path(*path)
+            path.parent.mkdir(parents=True, exist_ok=True)
         else:
-            pathname = self.tmpfile
-        with open(pathname, 'w') as f:
+            path = self.tmpfile
+        with open(path, 'w') as f:
             print(content, file=f)
 
     def test_sync_single(self):
         self.write_file('hello')
-        self.assertTrue(do_sync(self.context, self.tmpfile, 6, '', 'world'))
-        with open(os.path.join(self.tmpdir, 'world')) as f:
+        self.assertTrue(do_sync(self.context, self.tmpfile, 6,
+                                Path(), 'world'))
+        with open(self.tmpdir / 'world') as f:
             self.assertEqual(f.read(), 'hello\n')
 
     def test_sync_single_bogus(self):
         self.write_file('hello')
         self.context.sftp.bad_mode.add('put-bogus')
-        self.assertFalse(do_sync(self.context, self.tmpfile, 6, '', 'world'))
+        self.assertFalse(do_sync(self.context, self.tmpfile, 6,
+                                 Path(), 'world'))
 
     def test_sync_bad_root(self):
         self.write_file('hello')
         self.context.sftp.bad_mode.add('stat-not-found')
         self.assertFalse(do_sync(self.context, self.tmpfile, 6,
-                                 'inner', 'world'))
-        self.assertFalse(os.path.exists(os.path.join(self.tmpdir, 'world')))
-        self.assertFalse(os.path.exists(os.path.join(self.tmpdir,
-                                                     'inner', 'world')))
+                                 Path('inner'), 'world'))
+        self.assertFalse((self.tmpdir / 'world').exists())
+        self.assertFalse((self.tmpdir / 'inner' / 'world').exists())
 
     def test_sync_deep(self):
         self.write_file('hello')
         self.assertTrue(do_sync(self.context, self.tmpfile, 6,
-                                os.path.join('in', 'ner'), 'world'))
-        with open(os.path.join(self.tmpdir, 'in', 'ner', 'world')) as f:
+                                Path('in', 'ner'), 'world'))
+        with open(self.tmpdir / 'in' / 'ner' / 'world') as f:
             self.assertEqual(f.read(), 'hello\n')
 
     def test_sync_inner_fail(self):
         self.write_file('hello')
         self.write_file('my', 'inner')
         self.assertFalse(do_sync(self.context, self.tmpfile, 6,
-                                 'inner', 'world'))
-        with open(os.path.join(self.tmpdir, 'inner')) as f:
+                                 Path('inner'), 'world'))
+        with open(self.tmpdir / 'inner') as f:
             self.assertEqual(f.read(), 'my\n')
-        self.assertFalse(os.path.exists(os.path.join(self.tmpdir, 'world')))
+        self.assertFalse((self.tmpdir / 'world').exists())
 
     def test_sync_conflict_dir(self):
         self.write_file('hello')
         self.write_file('my', 'inner', 'world')
-        self.assertFalse(do_sync(self.context, self.tmpfile, 6, '', 'inner'))
-        with open(os.path.join(self.tmpdir, 'inner', 'world')) as f:
+        self.assertFalse(do_sync(self.context, self.tmpfile, 6,
+                                 Path(), 'inner'))
+        with open(self.tmpdir / 'inner' / 'world') as f:
             self.assertEqual(f.read(), 'my\n')
-        self.assertFalse(os.path.exists(os.path.join(self.tmpdir, 'world')))
+        self.assertFalse((self.tmpdir / 'world').exists())
 
     def test_sync_conflict(self):
         self.write_file('hello')
         self.write_file('my', 'world')
         self.context.remote.hashsum_mock = MagicMock(
             return_value=hashlib.sha1(b'my\n').hexdigest())
-        self.assertFalse(do_sync(self.context, self.tmpfile, 6, '', 'world'))
-        with open(os.path.join(self.tmpdir, 'world')) as f:
+        self.assertFalse(do_sync(self.context, self.tmpfile, 6,
+                                 Path(), 'world'))
+        with open(self.tmpdir / 'world') as f:
             self.assertEqual(f.read(), 'my\n')
 
     def test_sync_partial(self):
@@ -145,8 +150,9 @@ class SyncTest(unittest.TestCase):
         self.write_file('my', 'world')
         self.context.remote.hashsum_mock = MagicMock(
             return_value=hashlib.sha1(b'my\n').hexdigest())
-        self.assertTrue(do_sync(self.context, self.tmpfile, 9, '', 'world'))
-        with open(os.path.join(self.tmpdir, 'world')) as f:
+        self.assertTrue(do_sync(self.context, self.tmpfile, 9,
+                                Path(), 'world'))
+        with open(self.tmpdir / 'world') as f:
             self.assertEqual(f.read(), 'my\nhello\n')
 
     def test_sync_partial_bogus(self):
@@ -155,15 +161,17 @@ class SyncTest(unittest.TestCase):
         self.context.sftp.bad_mode.add('put-bogus')
         self.context.remote.hashsum_mock = MagicMock(
             return_value=hashlib.sha1(b'my\n').hexdigest())
-        self.assertFalse(do_sync(self.context, self.tmpfile, 9, '', 'world'))
+        self.assertFalse(do_sync(self.context, self.tmpfile, 9,
+                                 Path(), 'world'))
 
     def test_sync_partial_underread(self):
         self.write_file('my')  # delibrate size mismatch
         self.write_file('mymy', 'world')
         self.context.remote.hashsum_mock = MagicMock(
             return_value=hashlib.sha1(b'mymy\n').hexdigest())
-        self.assertFalse(do_sync(self.context, self.tmpfile, 9, '', 'world'))
-        with open(os.path.join(self.tmpdir, 'world')) as f:
+        self.assertFalse(do_sync(self.context, self.tmpfile, 9,
+                                 Path(), 'world'))
+        with open(self.tmpdir / 'world') as f:
             self.assertEqual(f.read(), 'mymy\n')
 
     def test_sync_identical(self):
@@ -171,8 +179,9 @@ class SyncTest(unittest.TestCase):
         self.write_file('my', 'world')
         self.context.remote.hashsum_mock = MagicMock(
             return_value=hashlib.sha1(b'my\n').hexdigest())
-        self.assertTrue(do_sync(self.context, self.tmpfile, 3, '', 'world'))
-        with open(os.path.join(self.tmpdir, 'world')) as f:
+        self.assertTrue(do_sync(self.context, self.tmpfile, 3,
+                                Path(), 'world'))
+        with open(self.tmpdir / 'world') as f:
             self.assertEqual(f.read(), 'my\n')
 
     def test_sync_over(self):
@@ -180,21 +189,24 @@ class SyncTest(unittest.TestCase):
         self.write_file('my\nhello', 'world')
         self.context.remote.hashsum_mock = MagicMock(
             return_value=hashlib.sha1(b'my\nhello\n').hexdigest())
-        self.assertFalse(do_sync(self.context, self.tmpfile, 3, '', 'world'))
-        with open(os.path.join(self.tmpdir, 'world')) as f:
+        self.assertFalse(do_sync(self.context, self.tmpfile, 3,
+                                 Path(), 'world'))
+        with open(self.tmpdir / 'world') as f:
             self.assertEqual(f.read(), 'my\nhello\n')
 
     def test_sync_full(self):
         self.write_file('hello')
         self.context.remote.space_free_mock = MagicMock(return_value=100000)
-        self.assertFalse(do_sync(self.context, self.tmpfile, 6, '', 'world'))
-        self.assertFalse(os.path.exists(os.path.join(self.tmpdir, 'world')))
+        self.assertFalse(do_sync(self.context, self.tmpfile, 6,
+                                 Path(), 'world'))
+        self.assertFalse((self.tmpdir / 'world').exists())
 
     def test_sync_full_after_write(self):
         self.write_file('hello')
         self.context.remote.space_free_mock = MagicMock(return_value=1000002)
-        self.assertFalse(do_sync(self.context, self.tmpfile, 6, '', 'world'))
-        self.assertFalse(os.path.exists(os.path.join(self.tmpdir, 'world')))
+        self.assertFalse(do_sync(self.context, self.tmpfile, 6,
+                                 Path(), 'world'))
+        self.assertFalse((self.tmpdir / 'world').exists())
 
     def test_sync_partial_full(self):
         self.write_file('my\nhello')
@@ -202,8 +214,9 @@ class SyncTest(unittest.TestCase):
         self.context.remote.space_free_mock = MagicMock(return_value=1000002)
         self.context.remote.hashsum_mock = MagicMock(
             return_value=hashlib.sha1(b'my\n').hexdigest())
-        self.assertFalse(do_sync(self.context, self.tmpfile, 9, '', 'world'))
-        with open(os.path.join(self.tmpdir, 'world')) as f:
+        self.assertFalse(do_sync(self.context, self.tmpfile, 9,
+                                 Path(), 'world'))
+        with open(self.tmpdir / 'world') as f:
             self.assertEqual(f.read(), 'my\n')
 
     def test_sync_partial_almost_full(self):
@@ -212,12 +225,13 @@ class SyncTest(unittest.TestCase):
         self.context.remote.space_free_mock = MagicMock(return_value=1000007)
         self.context.remote.hashsum_mock = MagicMock(
             return_value=hashlib.sha1(b'my\n').hexdigest())
-        self.assertTrue(do_sync(self.context, self.tmpfile, 9, '', 'world'))
-        with open(os.path.join(self.tmpdir, 'world')) as f:
+        self.assertTrue(do_sync(self.context, self.tmpfile, 9,
+                                Path(), 'world'))
+        with open(self.tmpdir / 'world') as f:
             self.assertEqual(f.read(), 'my\nhello\n')
 
     def tearDown(self):
-        os.unlink(self.tmpfile)
+        self.tmpfile.unlink()
         shutil.rmtree(self.tmpdir)
 
 

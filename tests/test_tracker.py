@@ -1,11 +1,11 @@
 import unittest
 from unittest.mock import MagicMock, call
 
-import os
 import configparser
 import shutil
 import tempfile
 import contextlib
+from pathlib import Path
 
 import sqlite3
 
@@ -15,12 +15,12 @@ from synconce.tracker import init_db, execute_walk
 
 class TrackerTest(unittest.TestCase):
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp()
+        self.tmpdir = Path(tempfile.mkdtemp())
         config = configparser.ConfigParser()
         config.read_dict({
             'sync_test': {
                 'data': ':memory:',
-                'local': self.tmpdir,
+                'local': str(self.tmpdir),
                 'host': '0.0.0.0',
                 'port': '22',
                 'user': 'nobody',
@@ -34,9 +34,9 @@ class TrackerTest(unittest.TestCase):
         self.context.config = config['sync_test']
 
     def write_file(self, content, *path):
-        if len(path) > 1:
-            os.makedirs(os.path.join(self.tmpdir, *path[:-1]), exist_ok=True)
-        with open(os.path.join(self.tmpdir, *path), 'w') as f:
+        path = self.tmpdir / Path(*path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, 'w') as f:
             print(content, file=f)
 
     def test_tracker_blank(self):
@@ -75,7 +75,7 @@ class TrackerTest(unittest.TestCase):
             execute_walk(context)
 
         context.do_sync.assert_called_once_with(
-            context, os.path.join(self.tmpdir, 'world'), 6, '', 'world')
+            context, self.tmpdir / 'world', 6, Path(), 'world')
 
     def test_tracker_dir_once(self):
         context = self.context
@@ -91,8 +91,8 @@ class TrackerTest(unittest.TestCase):
             execute_walk(context)
 
         context.do_sync.assert_called_once_with(
-            context, os.path.join(self.tmpdir, 'inner', 'world'), 6,
-            'inner', 'world')
+            context, self.tmpdir / 'inner' / 'world', 6,
+            Path('inner'), 'world')
 
     def test_tracker_failed_twice(self):
         context = self.context
@@ -108,7 +108,7 @@ class TrackerTest(unittest.TestCase):
             execute_walk(context)
 
         context.do_sync.assert_has_calls([call(
-            context, os.path.join(self.tmpdir, 'world'), 6, '', 'world'
+            context, self.tmpdir / 'world', 6, Path(), 'world'
         )] * 2)
 
     def test_tracker_changed_twice(self):
@@ -126,10 +126,11 @@ class TrackerTest(unittest.TestCase):
             self.write_file('hello!', 'world')
             execute_walk(context)
 
-        context.do_sync.assert_has_calls([
-            call(context, os.path.join(self.tmpdir, 'world'), 6, '', 'world'),
-            call(context, os.path.join(self.tmpdir, 'world'), 7, '', 'world'),
-        ])
+        context.do_sync.assert_has_calls([call(
+            context, self.tmpdir / 'world', 6, Path(), 'world'
+        ), call(
+            context, self.tmpdir / 'world', 7, Path(), 'world'
+        )])
 
     def test_tracker_flatten(self):
         context = self.context
@@ -146,8 +147,8 @@ class TrackerTest(unittest.TestCase):
             execute_walk(context)
 
         context.do_sync.assert_called_once_with(
-            context, os.path.join(self.tmpdir, 'inner', 'world'), 6,
-            '', 'inner$world')
+            context, self.tmpdir / 'inner' / 'world', 6,
+            Path(), 'inner$world')
 
     def tearDown(self):
         shutil.rmtree(self.tmpdir)
