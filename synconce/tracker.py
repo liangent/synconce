@@ -59,9 +59,15 @@ def maybe_sync(context, root, filename):
             logger.info(f'Synchronization of {pathname} complete, size {size}')
             set_size(context, pathname, size)
 
+            return True
+
+    return False
+
 
 def execute_walk(context):
     config = context.config
+
+    synced = False
 
     for root, dirs, files in os.walk(config['local']):
         for filename in files:
@@ -74,10 +80,13 @@ def execute_walk(context):
                 logger.info(f'Skipping {root}//{filename}: is lock_file')
                 continue
 
-            maybe_sync(context, Path(root), filename)
+            this_synced = maybe_sync(context, Path(root), filename)
+            synced = synced or this_synced  # short-circuit calculation
+
+    return synced
 
 
-def execute(config, do_sync=None):
+def execute(config, do_sync=None, exec_command=None):
     logger.info(f'Starting sync for {dict(config)}')
 
     if config['lock_file']:
@@ -95,8 +104,17 @@ def execute(config, do_sync=None):
         with create_context(config) as context:
             if do_sync:
                 context.do_sync = do_sync
+
+            if exec_command:
+                context.remote.exec_command = exec_command
+
             init_db(context.db, context.cursor)
-            execute_walk(context)
+            synced = execute_walk(context)
+
+            if synced and config['post_sync']:
+                logger.info(f'Running post_sync: {config["post_sync"]}')
+                out, err = context.remote.exec_command(config['post_sync'])
+                logger.debug(f'post_sync out={repr(out)}, err={repr(err)}')
     finally:
         if fd != -1:
             fcntl.lockf(fd, fcntl.LOCK_UN)

@@ -65,6 +65,8 @@ class SyncTest(unittest.TestCase):
                 'remote': '/',
                 'exclude': '',
                 'min_free': 1000000,
+                'lock_file': '',
+                'post_sync': 'echo POST_SYNC',
             }
         })
         self.context = Context()

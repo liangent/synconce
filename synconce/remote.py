@@ -32,3 +32,12 @@ class Remote(object):
             return output.decode('ascii')
 
         return collect
+
+    def exec_command(self, command):
+        stdin, stdout, stderr = self.ssh.exec_command(command)
+
+        stdout_read = stdout.read()
+        stderr_read = stderr.read()
+        stdout.channel.close()
+
+        return stdout_read, stderr_read

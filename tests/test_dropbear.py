@@ -61,8 +61,9 @@ class DropbearTest(unittest.TestCase):
                 'rsa_key': DROPBEAR_CLIENT_KEYFILE,
                 'remote': self.tmpdir_remote,
                 'exclude': '',
-                'min_free': str(1 << 32),
+                'min_free': '0',
                 'lock_file': '.lock',
+                'post_sync': 'echo POST_SYNC',
             }
         })
 
@@ -119,6 +120,20 @@ class DropbearTest(unittest.TestCase):
         execute(self.config, do_sync=do_sync_mock)
         execute(self.config, do_sync=do_sync_mock)
         self.assertEqual(do_sync_mock.call_count, 2)
+
+    def test_postsync(self):
+        self.write_file(self.tmpdir_local, 'hello', 'world')
+        exec_command_mock = MagicMock(return_value=(b'', b''))
+        execute(self.config, exec_command=exec_command_mock)
+        exec_command_mock.assert_called_once_with('echo POST_SYNC')
+
+    def test_postsync_skipped(self):
+        self.write_file(self.tmpdir_local, 'hello', 'world')
+        do_sync_mock = MagicMock(return_value=False)
+        exec_command_mock = MagicMock(return_value=(b'', b''))
+        execute(self.config, do_sync=do_sync_mock,
+                exec_command=exec_command_mock)
+        exec_command_mock.assert_not_called()
 
     def tearDown(self):
         self.dropbear.terminate()

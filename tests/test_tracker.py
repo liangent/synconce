@@ -29,6 +29,7 @@ class TrackerTest(unittest.TestCase):
                 'exclude': '*.excluded',
                 'min_free': str(1 << 32),
                 'lock_file': '',
+                'post_sync': 'echo POST_SYNC',
             }
         })
         self.context = Context()
