@@ -89,10 +89,23 @@ def full_transfer(context, src, src_size, dest):
         return True
 
 
+def do_rename(context, src, dst):
+    try:
+        context.sftp.posix_rename(str(src), str(dst))
+    except IOError:
+        logger.warn(f'Failed moving {src} to {dst}')
+        return False
+    logger.info(f'Moved {src} to {dst}')
+    return True
+
+
 def do_sync(context, fileloc, size, path, filename):
     min_free = context.config.getint('min_free')
+    filename_tmp = f'.{filename}.synconce'
     dest = path / filename
-    logger.info(f'Synchronizing {fileloc} ({size:,} bytes) to {dest}')
+    dest_tmp = path / filename_tmp
+    logger.info(f'Synchronizing {fileloc} ({size:,} bytes)'
+                f' to {dest} (tmp = {dest_tmp})')
 
     get_space_free = context.remote.space_free(str(path))
 
@@ -103,36 +116,68 @@ def do_sync(context, fileloc, size, path, filename):
     try:
         attr = context.sftp.stat(str(dest))
     except FileNotFoundError:
-        space_free = get_space_free()
-        logger.info(f'Remote file {dest} does not exist'
-                    f', {space_free:,} bytes available at "{path}"'
-                    f', sending {fileloc}')
+        attr = None
 
-        if space_free - size < min_free:
-            logger.error(f'Space available ({space_free:,} bytes)'
-                         f' is not enough to store {dest}'
-                         f': min_free {min_free:,} bytes'
-                         f', size {size:,} bytes'
-                         f', space after transfer {space_free - size:,} bytes')
+    if attr:
+        logger.info(f'Remote path {dest} exists: {repr(attr)}')
+
+        if not stat.S_ISREG(attr.st_mode) or attr.st_size != size:
+            logger.warn('Remote path is not a file or has different size')
             return False
 
-        return full_transfer(context, fileloc, size, dest)
+        remote_sha1sum = context.remote.hashsum(str(dest), 'sha1')()
+        with open(fileloc, 'rb') as f:
+            local_sha1sum = utils.head_sha1(f, size)
 
-    # file already there
+        if remote_sha1sum == local_sha1sum:
+            logger.info(f'Remote and local files match ({remote_sha1sum})')
+            return True
+
+        logger.warn(f'Remote ({remote_sha1sum}) and local ({local_sha1sum})'
+                    f' files do not match; skipping')
+        return False
+
+    try:
+        attr_tmp = context.sftp.stat(str(dest_tmp))
+    except FileNotFoundError:
+        attr_tmp = None
+
+    if attr_tmp:
+        # tmp file already there; might be a previous incomplete transfer
+        space_free = get_space_free()
+        logger.info(f'Remote tmp file {dest_tmp} exists: {repr(attr_tmp)}'
+                    f'; {space_free:,} bytes available at "{path}"')
+
+        if not stat.S_ISREG(attr_tmp.st_mode):
+            return False
+
+        if space_free + attr_tmp.st_size - size < min_free:
+            logger.error(f'Space available ({space_free:,} bytes)'
+                         f' is not enough to send partial {dest_tmp}'
+                         f': existing size {attr_tmp.st_size:,} bytes'
+                         f', min_free {min_free:,} bytes'
+                         f', size {size:,} bytes, space after transfer'
+                         f' {space_free + attr_tmp.st_size - size:,} bytes')
+            return False
+
+        # if maybe_partial fails, fall back to full_transfer
+        if maybe_partial(context, fileloc, size, dest_tmp, attr_tmp.st_size):
+            # if do_rename fails, redo full_transfer might not help
+            return do_rename(context, dest_tmp, dest)
+
+    # falling back or completely new file to sync
     space_free = get_space_free()
-    logger.info(f'Remote file {dest} exists: {repr(attr)}'
-                f'; {space_free:,} bytes available at "{path}"')
+    logger.info(f'Remote file {dest} does not exist: doing full transfer'
+                f', {space_free:,} bytes available at "{path}"'
+                f', sending {fileloc}')
 
-    if not stat.S_ISREG(attr.st_mode):
-        return False
-
-    if space_free + attr.st_size - size < min_free:
+    if space_free - size < min_free:
         logger.error(f'Space available ({space_free:,} bytes)'
-                     f' is not enough to send partial {dest}'
-                     f': existing size {attr.st_size:,} bytes'
-                     f', min_free {min_free:,} bytes'
-                     f', size {size:,} bytes, space after transfer'
-                     f' {space_free + attr.st_size - size:,} bytes')
+                     f' is not enough to store {dest}'
+                     f': min_free {min_free:,} bytes'
+                     f', size {size:,} bytes'
+                     f', space after transfer {space_free - size:,} bytes')
         return False
 
-    return maybe_partial(context, fileloc, size, dest, attr.st_size)
+    return (full_transfer(context, fileloc, size, dest_tmp)
+            and do_rename(context, dest_tmp, dest))
